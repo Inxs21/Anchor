@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Link } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { authErrorMessage, useAuth } from '@/lib/auth';
 import { Ocean } from '@/constants/theme';
 
@@ -61,7 +61,7 @@ export default function SignUp() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.logoCircle}>
-            <Ionicons name="anchor" size={40} color={Ocean.accent} />
+            <MaterialCommunityIcons name="anchor" size={40} color={Ocean.accent} />
           </View>
           <Text style={styles.title}>Create your account</Text>
           <Text style={styles.subtitle}>A few seconds, then we personalize Anchor.</Text>

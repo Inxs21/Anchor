@@ -91,6 +91,8 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="(auth)" />
             <Stack.Screen name="(onboarding)" />
+            <Stack.Screen name="checkin" options={{ presentation: 'modal' }} />
+            <Stack.Screen name="report" options={{ presentation: 'modal' }} />
           </Stack>
         </Gate>
       </AuthProvider>

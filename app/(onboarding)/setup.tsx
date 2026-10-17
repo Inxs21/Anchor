@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
 import { useAuth } from '@/lib/auth';
 import { addMedication, getMedications, type MedDraft, type Medication } from '@/lib/medications';
@@ -66,7 +66,7 @@ export default function Setup() {
             {meds.map((m) => (
               <View key={m.id} style={styles.medRow}>
                 <View style={styles.medIcon}>
-                  <Ionicons name="pill" size={16} color={Ocean.accent} />
+                  <MaterialCommunityIcons name="pill" size={16} color={Ocean.accent} />
                 </View>
                 <View style={styles.medInfo}>
                   <Text style={styles.medName}>

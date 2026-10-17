@@ -42,3 +42,6 @@ app-example
 # generated native folders
 /ios
 /android
+
+# generated report preview
+dist-report/

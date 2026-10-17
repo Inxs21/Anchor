@@ -18,7 +18,9 @@ export const Ocean = {
   tabBarBorder: '#252F70',
 } as const;
 
-export type MoodState = 'stable' | 'elevated' | 'low' | 'mixed';
+// Single source of truth lives in the dependency-free analysis module.
+export type { MoodState } from '@/lib/analysis';
+import type { MoodState } from '@/lib/analysis';
 
 export const stateColor = (s: MoodState): string =>
   s === 'elevated' ? Ocean.elevated : s === 'low' ? Ocean.low : s === 'mixed' ? Ocean.mixed : Ocean.accent;

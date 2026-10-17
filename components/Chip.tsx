@@ -1,5 +1,5 @@
 import { StyleSheet, Text, TouchableOpacity } from 'react-native';
-import { Ocean, radius } from '@/constants/theme';
+import { Ocean } from '@/constants/theme';
 
 type Props = {
   label: string;

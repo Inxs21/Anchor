@@ -1,5 +1,5 @@
 import { StyleSheet, Text, View } from 'react-native';
-import { Ocean, stateColor, stateLabel, type MoodState } from '@/constants/theme';
+import { stateColor, stateLabel, type MoodState } from '@/constants/theme';
 
 export function StateBadge({ state, size = 'md' }: { state: MoodState; size?: 'sm' | 'md' }) {
   const color = stateColor(state);
