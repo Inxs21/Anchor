@@ -1,10 +1,9 @@
-// Local-date helpers — the whole app keys days by LOCAL calendar date (the old
-// version used UTC and mis-filed evening activity into the next day).
+// All dates are handled in LOCAL time — the app's "day" follows the user's clock.
 
 export function dateKey(d: Date = new Date()): string {
   const y = d.getFullYear();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
 
@@ -19,12 +18,18 @@ export function addDays(key: string, n: number): string {
   return dateKey(d);
 }
 
-export function lastNDays(n: number, end: string = dateKey()): string[] {
-  const out: string[] = [];
-  for (let i = n - 1; i >= 0; i--) out.push(addDays(end, -i));
-  return out;
+/** Keys from oldest to newest, ending at endKey (default: today). */
+export function lastNDays(n: number, endKey: string = dateKey()): string[] {
+  const keys: string[] = [];
+  for (let i = n - 1; i >= 0; i--) keys.push(addDays(endKey, -i));
+  return keys;
 }
 
 export function weekdayOf(key: string): number {
   return keyToDate(key).getDay();
+}
+
+export function shortLabel(key: string): string {
+  const d = keyToDate(key);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
