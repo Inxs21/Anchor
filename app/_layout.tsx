@@ -1,83 +1,104 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import 'react-native-reanimated';
-
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '@/lib/auth';
-import { getEpisodeFingerprint } from '@/lib/checkins';
+import { getFingerprint } from '@/lib/fingerprint';
+import { Ocean } from '@/constants/theme';
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+type FpState = 'unknown' | 'yes' | 'no' | 'error';
+
+function Gate({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
-  const router   = useRouter();
   const segments = useSegments();
+  const router = useRouter();
+  const inAuth = segments[0] === '(auth)';
+  const inOnboarding = segments[0] === '(onboarding)';
+  const [fp, setFp] = useState<FpState>('unknown');
 
-  const [fpChecked,    setFpChecked]    = useState(false);
-  const [hasFingerprint, setHasFingerprint] = useState(false);
-
-  // Check fingerprint on login AND whenever the active route group changes
-  // (so navigating away from onboarding after saving re-reads the value)
+  // Probe onboarding state for the signed-in user
   useEffect(() => {
-    if (!user) {
-      setFpChecked(false);
-      setHasFingerprint(false);
-      return;
-    }
-    setFpChecked(false);
-    getEpisodeFingerprint(user.uid).then((fp) => {
-      setHasFingerprint(fp !== null);
-      setFpChecked(true);
-    });
-  }, [user?.uid, segments[0]]);
+    const uid = user?.uid;
+    setFp('unknown');
+    if (!uid) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getFingerprint(uid);
+        if (!cancelled) setFp(data ? 'yes' : 'no');
+      } catch {
+        // Transient read failure: let the app open instead of dumping into onboarding
+        if (!cancelled) setFp('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   useEffect(() => {
     if (loading) return;
-
-    const inAuthGroup       = segments[0] === '(auth)';
-    const inOnboardingGroup = segments[0] === '(onboarding)';
-
-    if (!user && !inAuthGroup) {
-      router.replace('/(auth)/sign-in');
+    if (!user) {
+      if (!inAuth) router.replace('/(auth)/sign-in');
       return;
     }
-
-    if (user && inAuthGroup) {
-      // Just signed in — wait for fingerprint check before routing
-      if (!fpChecked) return;
-      if (!hasFingerprint) {
-        router.replace('/(onboarding)/fingerprint');
-      } else {
-        router.replace('/');
-      }
+    if (fp === 'unknown') return;
+    if (inAuth) {
+      router.replace(fp === 'no' ? '/(onboarding)/fingerprint' : '/');
       return;
     }
-
-    if (user && !fpChecked) return;
-
-    if (user && !hasFingerprint && !inOnboardingGroup) {
-      router.replace('/(onboarding)/fingerprint');
+    if (fp === 'no' && !inOnboarding) {
+      // Flag may be stale right after onboarding saved it — verify before bouncing
+      let cancelled = false;
+      getFingerprint(user.uid)
+        .then((data) => {
+          if (cancelled) return;
+          if (data) setFp('yes');
+          else router.replace('/(onboarding)/fingerprint');
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [user, loading, segments, fpChecked, hasFingerprint]);
+    if (fp !== 'no' && inOnboarding) router.replace('/');
+  }, [loading, user, fp, inAuth, inOnboarding, router]);
 
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)"        options={{ headerShown: false }} />
-        <Stack.Screen name="(auth)"        options={{ headerShown: false }} />
-        <Stack.Screen name="(onboarding)"  options={{ headerShown: false }} />
-        <Stack.Screen name="modal"         options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
-  );
+  if (loading || (user && fp === 'unknown')) {
+    return (
+      <View style={styles.boot}>
+        <ActivityIndicator size="large" color={Ocean.accent} />
+      </View>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootLayoutNav />
-    </AuthProvider>
+    <GestureHandlerRootView style={styles.flex}>
+      <AuthProvider>
+        <StatusBar style="light" />
+        <Gate>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: Ocean.bg },
+            }}
+          >
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(onboarding)" />
+          </Stack>
+        </Gate>
+      </AuthProvider>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  boot: { flex: 1, backgroundColor: Ocean.bg, alignItems: 'center', justifyContent: 'center' },
+});

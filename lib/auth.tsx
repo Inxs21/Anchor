@@ -1,15 +1,15 @@
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  User,
   createUserWithEmailAndPassword,
-  signOut as firebaseSignOut,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
   updateProfile,
-} from "firebase/auth";
-import { createContext, useContext, useEffect, useState } from "react";
-import { auth } from "./firebase";
+  type User,
+} from 'firebase/auth';
+import { auth } from './firebase';
 
-type AuthContextType = {
+type AuthContextValue = {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
@@ -17,43 +17,62 @@ type AuthContextType = {
   signOut: () => Promise<void>;
 };
 
-const AuthContext = createContext<AuthContextType | null>(null);
+const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  //
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
+    return onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
     });
-    return unsubscribe;
   }, []);
 
-  const signIn = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
-  };
-
-  const signUp = async (email: string, password: string, name: string) => {
-    const { user } = await createUserWithEmailAndPassword(auth, email, password);
-    await updateProfile(user, { displayName: name.trim() });
-    setUser({ ...user, displayName: name.trim() } as User);
-  };
-
-  const signOut = async () => {
-    await firebaseSignOut(auth);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      loading,
+      signIn: async (email, password) => {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      },
+      signUp: async (email, password, name) => {
+        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        const trimmed = name.trim();
+        if (trimmed) await updateProfile(cred.user, { displayName: trimmed });
+      },
+      signOut: () => firebaseSignOut(auth),
+    }),
+    [user, loading],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
+export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
+}
+
+export function authErrorMessage(e: unknown): string {
+  const code = (e as { code?: string })?.code ?? '';
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+      return 'Incorrect email or password.';
+    case 'auth/email-already-in-use':
+      return 'That email is already registered.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters.';
+    case 'auth/invalid-email':
+      return 'That email address looks invalid.';
+    case 'auth/missing-password':
+      return 'Enter your password.';
+    case 'auth/network-request-failed':
+      return 'Network error — check your connection.';
+    default:
+      return (e as Error)?.message ?? 'Something went wrong.';
+  }
 }

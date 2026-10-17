@@ -1,324 +1,181 @@
-/**
- * Medication data layer.
- *
- * All Firestore access is centralised here. The UI, AI companion, and report
- * features import these functions — they never touch Firestore directly.
- * If the data source changes, only this file needs to be updated.
- *
- * Firestore schema
- * ─────────────────
- * users/{uid}/medications/{medId}
- *   name:      string
- *   dosage:    string          e.g. "200 mg"
- *   schedule:  Schedule        e.g. "daily"
- *   times:     string[]        e.g. ["08:00","21:00"]  (24-hr HH:MM, empty for as_needed)
- *   weekDay:   number | null   0=Sun … 6=Sat, only used when schedule="weekly"
- *
- * users/{uid}/medicationLogs/{dateStr}   dateStr = "YYYY-MM-DD"
- *   doses: Record<doseKey, DoseLog>
- *     doseKey = "{medId}_{time}"   (for as_needed: "{medId}_manual_{timestamp}")
- */
-
 import {
-  collection,
-  doc,
   addDoc,
-  setDoc,
-  updateDoc,
+  collection,
   deleteDoc,
-  getDocs,
+  doc,
   getDoc,
-  deleteField,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "./firebase";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type Schedule = "daily" | "twice_daily" | "weekly" | "as_needed" | "custom";
+  getDocs,
+  serverTimestamp,
+  setDoc,
+} from 'firebase/firestore';
+import { db } from './firebase';
+import { keyToDate, weekdayOf } from './dates';
 
 export type Medication = {
   id: string;
   name: string;
   dosage: string;
-  schedule: Schedule;
-  times: string[];      // HH:MM 24-hr; empty for as_needed
-  weekDay: number | null; // 0–6; only set when schedule === "weekly"
+  schedule: 'daily' | 'custom';
+  days: number[]; // 0=Sun..6=Sat, ignored when schedule === 'daily'
+  times: string[]; // "HH:MM"; empty = as-needed (PRN)
 };
 
-export type DoseStatus = "pending" | "taken" | "missed";
+export type MedicationDraft = Omit<Medication, 'id'>;
 
-export type DoseLog = {
+export type DoseEntry = {
+  key: string;
   medId: string;
   medName: string;
-  scheduledTime: string; // "08:00" or "manual" for as_needed
-  status: DoseStatus;
-  takenAt: Timestamp | null;
+  time: string | null; // null = as-needed
+  takenAt: number;
 };
 
-export type DailyLog = {
-  date: string;
-  doses: Record<string, DoseLog>;
+export type DoseSlot = {
+  key: string;
+  medId: string;
+  medName: string;
+  dosage: string;
+  time: string;
+  status: 'pending' | 'taken' | 'missed';
+  takenAt?: number;
 };
 
-export type AdherenceData = {
-  totalDoses: number;
-  takenDoses: number;
-  missedDoses: number;
-  adherenceRate: number; // 0–1
-  missedDoseDetails: (DoseLog & { date: string })[];
-};
+export type DayLog = { date: string; doses: DoseEntry[] };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+const GRACE_MINUTES = 60;
 
-export function todayStr(): string {
-  return new Date().toISOString().split("T")[0];
-}
+const medsCol = (uid: string) => collection(db, 'users', uid, 'medications');
+const medRef = (uid: string, id: string) => doc(db, 'users', uid, 'medications', id);
+const logRef = (uid: string, key: string) => doc(db, 'users', uid, 'logs', key);
 
-export function doseKey(medId: string, time: string): string {
+export function doseSlotKey(medId: string, time: string): string {
   return `${medId}_${time}`;
 }
 
-export function formatTime(time24: string): string {
-  if (time24 === "manual") return "As needed";
-  const [h, m] = time24.split(":").map(Number);
-  const period = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 || 12;
-  return `${hour}:${m.toString().padStart(2, "0")} ${period}`;
+export function scheduledMedsForDay(meds: Medication[], key: string): Medication[] {
+  const weekday = weekdayOf(key);
+  return meds.filter((m) => m.schedule === 'daily' || m.days.includes(weekday));
 }
 
-export function scheduleLabel(s: Schedule): string {
-  switch (s) {
-    case "daily":       return "Daily";
-    case "twice_daily": return "Twice Daily";
-    case "weekly":      return "Weekly";
-    case "as_needed":   return "As Needed";
-    case "custom":      return "Custom";
+// Pure: derives today's (or any day's) dose slots from meds + stored log.
+// Missed is derived from the absence of a "taken" entry past the grace window.
+export function buildSlots(
+  meds: Medication[],
+  key: string,
+  log: DayLog,
+  now: Date,
+): DoseSlot[] {
+  const takenByKey = new Map(log.doses.filter((d) => d.time !== null).map((d) => [d.key, d]));
+  const slots: DoseSlot[] = [];
+  const isPast = key < `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, '0')}-${`${now.getDate()}`.padStart(2, '0')}`;
+  const isToday = key === dateKeyOf(now);
+
+  for (const med of scheduledMedsForDay(meds, key)) {
+    for (const time of med.times) {
+      const k = doseSlotKey(med.id, time);
+      const entry = takenByKey.get(k);
+      if (entry) {
+        slots.push({ key: k, medId: med.id, medName: med.name, dosage: med.dosage, time, status: 'taken', takenAt: entry.takenAt });
+        continue;
+      }
+      const due = keyToDate(key);
+      const [h, m] = time.split(':').map(Number);
+      due.setHours(h, m, 0, 0);
+      const overdue = now.getTime() - due.getTime() > GRACE_MINUTES * 60_000;
+      const status: DoseSlot['status'] = (isPast || (isToday && overdue)) ? 'missed' : 'pending';
+      slots.push({ key: k, medId: med.id, medName: med.name, dosage: med.dosage, time, status });
+    }
   }
+  return slots.sort((a, b) => a.time.localeCompare(b.time));
 }
 
-/** True if the scheduled HH:MM is more than `graceMinutes` in the past today */
-function isPast(scheduledTime: string, graceMinutes = 60): boolean {
-  if (scheduledTime === "manual") return false;
-  const [h, m] = scheduledTime.split(":").map(Number);
-  const now = new Date();
-  const scheduled = new Date();
-  scheduled.setHours(h, m, 0, 0);
-  return now.getTime() - scheduled.getTime() > graceMinutes * 60 * 1000;
+function dateKeyOf(d: Date): string {
+  const m = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
-
-/** True if a medication should generate doses on the given date */
-function isScheduledForDate(med: Medication, dateStr: string): boolean {
-  if (med.schedule === "as_needed") return false; // never auto-generates
-  if (med.schedule === "weekly") {
-    const dayOfWeek = new Date(dateStr + "T12:00:00").getDay(); // avoid TZ edge
-    return med.weekDay === dayOfWeek;
-  }
-  return true; // daily + twice_daily always generate
-}
-
-// ─── Medication CRUD ──────────────────────────────────────────────────────────
 
 export async function getMedications(uid: string): Promise<Medication[]> {
-  const snap = await getDocs(collection(db, "users", uid, "medications"));
-  return snap.docs.map((d) => ({
-    schedule: "daily" as Schedule, // default for legacy docs
-    weekDay: null,
-    ...(d.data() as any),
-    id: d.id,
-  } as Medication));
+  const snap = await getDocs(medsCol(uid));
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Medication, 'id'>) }));
 }
 
-export async function addMedication(
-  uid: string,
-  med: Omit<Medication, "id">
-): Promise<Medication> {
-  const ref = await addDoc(collection(db, "users", uid, "medications"), med);
-  return { id: ref.id, ...med };
+export async function addMedication(uid: string, draft: MedicationDraft): Promise<string> {
+  const times = [...draft.times].sort();
+  const ref = await addDoc(medsCol(uid), { ...draft, times, createdAt: serverTimestamp() });
+  return ref.id;
 }
 
-export async function deleteMedication(uid: string, medId: string): Promise<void> {
-  await deleteDoc(doc(db, "users", uid, "medications", medId));
+export async function deleteMedication(uid: string, id: string): Promise<void> {
+  await deleteDoc(medRef(uid, id));
 }
 
-/** Remove all doses for a medication from a specific day's log */
-export async function removeMedDosesFromLog(
-  uid: string,
-  dateStr: string,
-  medId: string
-): Promise<void> {
-  const logRef = doc(db, "users", uid, "medicationLogs", dateStr);
-  const snap = await getDoc(logRef);
-  if (!snap.exists()) return;
-
-  const log = snap.data() as DailyLog;
-  const patch: Record<string, ReturnType<typeof deleteField>> = {};
-  for (const key of Object.keys(log.doses)) {
-    if (key.startsWith(`${medId}_`)) {
-      patch[`doses.${key}`] = deleteField();
-    }
-  }
-  if (Object.keys(patch).length > 0) await updateDoc(logRef, patch);
+export async function getDayLog(uid: string, key: string): Promise<DayLog> {
+  const snap = await getDoc(logRef(uid, key));
+  if (!snap.exists()) return { date: key, doses: [] };
+  const data = snap.data() as { date: string; doses?: DoseEntry[] };
+  return { date: data.date ?? key, doses: data.doses ?? [] };
 }
 
-// ─── Daily Log ────────────────────────────────────────────────────────────────
-
-/**
- * Load (or create) today's dose log.
- *
- * Key fix: if the log already exists, we still check for any medications
- * that don't have entries yet (e.g. just added) and merge them in.
- * Also auto-marks overdue pending doses as missed.
- */
-export async function getDailyLog(uid: string, dateStr: string): Promise<DailyLog> {
-  const logRef = doc(db, "users", uid, "medicationLogs", dateStr);
-  const [logSnap, medications] = await Promise.all([
-    getDoc(logRef),
-    getMedications(uid),
-  ]);
-
-  // Build the full set of expected dose keys for this date
-  const expectedDoses: Record<string, DoseLog> = {};
-  for (const med of medications) {
-    if (!isScheduledForDate(med, dateStr)) continue;
-    for (const time of med.times) {
-      const key = doseKey(med.id, time);
-      expectedDoses[key] = {
-        medId: med.id,
-        medName: med.name,
-        scheduledTime: time,
-        status: isPast(time) ? "missed" : "pending",
-        takenAt: null,
-      };
-    }
-  }
-
-  if (!logSnap.exists()) {
-    const log: DailyLog = { date: dateStr, doses: expectedDoses };
-    if (Object.keys(expectedDoses).length > 0) await setDoc(logRef, log);
-    return log;
-  }
-
-  const log = logSnap.data() as DailyLog;
-
-  const activeMedIds = new Set(medications.map((m) => m.id));
-
-  // ── Remove doses for medications that no longer exist ──
-  const stalePatch: Record<string, ReturnType<typeof deleteField>> = {};
-  for (const key of Object.keys(log.doses)) {
-    const medId = key.split("_")[0];
-    if (!activeMedIds.has(medId)) {
-      stalePatch[`doses.${key}`] = deleteField();
-      delete log.doses[key];
-    }
-  }
-
-  // ── Merge in any new medications added after the log was first created ──
-  const newDosesPatch: Record<string, unknown> = {};
-  for (const [key, dose] of Object.entries(expectedDoses)) {
-    if (!log.doses[key]) {
-      log.doses[key] = dose;
-      newDosesPatch[`doses.${key}`] = dose;
-    }
-  }
-
-  // ── Auto-mark overdue pending doses as missed ──
-  const missedPatch: Record<string, DoseStatus> = {};
-  for (const [key, dose] of Object.entries(log.doses)) {
-    if (dose.status === "pending" && isPast(dose.scheduledTime)) {
-      missedPatch[`doses.${key}.status`] = "missed";
-      log.doses[key].status = "missed";
-    }
-  }
-
-  const combined = { ...stalePatch, ...newDosesPatch, ...missedPatch };
-  if (Object.keys(combined).length > 0) await updateDoc(logRef, combined);
-
-  return log;
+async function writeLog(uid: string, key: string, log: DayLog): Promise<void> {
+  await setDoc(logRef(uid, key), { date: key, doses: log.doses });
 }
 
-/** Mark a single dose as taken */
-export async function markDoseTaken(
-  uid: string,
-  dateStr: string,
-  key: string
-): Promise<void> {
-  const logRef = doc(db, "users", uid, "medicationLogs", dateStr);
-  await updateDoc(logRef, {
-    [`doses.${key}.status`]: "taken",
-    [`doses.${key}.takenAt`]: Timestamp.now(),
-  });
+export async function takeDose(uid: string, key: string, slot: Omit<DoseSlot, 'status' | 'key'>): Promise<void> {
+  const log = await getDayLog(uid, key);
+  const k = doseSlotKey(slot.medId, slot.time);
+  const entry: DoseEntry = {
+    key: k,
+    medId: slot.medId,
+    medName: slot.medName,
+    time: slot.time,
+    takenAt: Date.now(),
+  };
+  const doses = log.doses.filter((d) => d.key !== k);
+  doses.push(entry);
+  await writeLog(uid, key, { ...log, doses });
 }
 
-/** Log an as-needed dose taken right now */
-export async function logAsNeededDose(
-  uid: string,
-  dateStr: string,
-  med: Medication
-): Promise<string> {
-  const key = doseKey(med.id, `manual_${Date.now()}`);
-  const logRef = doc(db, "users", uid, "medicationLogs", dateStr);
-  const dose: DoseLog = {
+export async function undoDose(uid: string, key: string, doseKey: string): Promise<void> {
+  const log = await getDayLog(uid, key);
+  const doses = log.doses.filter((d) => d.key !== doseKey);
+  await writeLog(uid, key, { ...log, doses });
+}
+
+export async function logPrnDose(uid: string, key: string, med: Medication): Promise<void> {
+  const log = await getDayLog(uid, key);
+  const entry: DoseEntry = {
+    key: `${med.id}_prn_${Date.now()}`,
     medId: med.id,
     medName: med.name,
-    scheduledTime: "manual",
-    status: "taken",
-    takenAt: Timestamp.now(),
+    time: null,
+    takenAt: Date.now(),
   };
-
-  const snap = await getDoc(logRef);
-  if (snap.exists()) {
-    await updateDoc(logRef, { [`doses.${key}`]: dose });
-  } else {
-    await setDoc(logRef, { date: dateStr, doses: { [key]: dose } });
-  }
-  return key;
+  await writeLog(uid, key, { ...log, doses: [...log.doses, entry] });
 }
 
-// ─── Adherence (for AI companion + report) ───────────────────────────────────
+export function prnDosesForDay(meds: Medication[], log: DayLog): DoseEntry[] {
+  const prnIds = new Set(meds.filter((m) => m.times.length === 0).map((m) => m.id));
+  return log.doses.filter((d) => d.time === null && prnIds.has(d.medId));
+}
 
-export async function getAdherenceData(
-  uid: string,
-  days: number = 30
-): Promise<AdherenceData> {
-  let totalDoses = 0;
-  let takenDoses = 0;
-  let missedDoses = 0;
-  const missedDoseDetails: (DoseLog & { date: string })[] = [];
+export type Adherence = { taken: number; missed: number; rate: number };
 
-  for (let i = 0; i < days; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split("T")[0];
-
-    const snap = await getDoc(doc(db, "users", uid, "medicationLogs", dateStr));
-    if (!snap.exists()) continue;
-
-    const log = snap.data() as DailyLog;
-    for (const dose of Object.values(log.doses)) {
-      if (dose.status === "pending") continue;
-      totalDoses++;
-      if (dose.status === "taken") takenDoses++;
-      if (dose.status === "missed") {
-        missedDoses++;
-        missedDoseDetails.push({ ...dose, date: dateStr });
-      }
+// Single source of truth for adherence (shared by Home, Meds and Report).
+export async function getAdherence(uid: string, dayKeys: string[]): Promise<Adherence> {
+  const [meds, logs] = await Promise.all([
+    getMedications(uid),
+    Promise.all(dayKeys.map((k) => getDayLog(uid, k))),
+  ]);
+  const now = new Date();
+  let taken = 0;
+  let missed = 0;
+  dayKeys.forEach((key, i) => {
+    for (const slot of buildSlots(meds, key, logs[i], now)) {
+      if (slot.status === 'taken') taken++;
+      else if (slot.status === 'missed') missed++;
     }
-  }
-
-  return {
-    totalDoses,
-    takenDoses,
-    missedDoses,
-    adherenceRate: totalDoses > 0 ? takenDoses / totalDoses : 1,
-    missedDoseDetails,
-  };
-}
-
-export async function getRecentMissedCount(
-  uid: string,
-  days: number = 7
-): Promise<number> {
-  const data = await getAdherenceData(uid, days);
-  return data.missedDoses;
+  });
+  const total = taken + missed;
+  return { taken, missed, rate: total === 0 ? 1 : taken / total };
 }
