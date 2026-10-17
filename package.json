@@ -13,7 +13,6 @@
     "check": "npm run check:analysis && npm run check:report && tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.135.0",
     "@expo/vector-icons": "^15.0.3",
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",

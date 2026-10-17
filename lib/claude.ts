@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_API_KEY, hasClaude } from './env';
 import { localAnalysis } from './analysis';
 import type { Analysis, CheckIn, VoiceScores } from './analysis';
@@ -6,31 +5,23 @@ import type { EpisodeFingerprint } from './fingerprint';
 import type { AdherenceSummary } from './medications';
 
 /**
- * Every Claude-backed feature in Anchor. The user's episode fingerprint is
- * injected into the system prompt on every single call — the whole point is
- * that the model reasons about THIS person's pattern, not a textbook one.
+ * The companion's conversation layer. The user's episode fingerprint is
+ * injected into the system prompt on every call — the point is that the model
+ * talks to THIS person's pattern, not a textbook one. Episode analysis, risk
+ * and alerts are heuristic and live in ./analysis; nothing here decides them.
+ *
+ * This talks to the Messages API over plain fetch rather than through
+ * @anthropic-ai/sdk: the SDK's bundle trips a circular-import error under
+ * Metro's web target, and one POST does not need a client library.
  *
  * The key ships in the client bundle, which is acceptable for a demo build but
- * must move behind a server before any real deployment. Each function degrades
- * to a deterministic local result when no key is present, so the app stays
- * usable in judging environments without credentials.
+ * must move behind a server before any real deployment. Every function here
+ * degrades to deterministic local copy when no key is present.
  */
 
+const API_URL = 'https://api.anthropic.com/v1/messages';
 // The spec calls for Sonnet; this is the current Sonnet generation.
 const MODEL = 'claude-sonnet-5-5';
-
-let cached: Anthropic | null = null;
-function client(): Anthropic {
-  if (!cached) {
-    cached = new Anthropic({
-      apiKey: ANTHROPIC_API_KEY,
-      // React Native has no browser storage to leak into, but the SDK's
-      // environment guard still needs to be waived explicitly.
-      dangerouslyAllowBrowser: true,
-    });
-  }
-  return cached;
-}
 
 export type CompanionContext = {
   displayName: string;
@@ -136,22 +127,31 @@ Keep replies to 2-4 sentences. Conversational, never clinical. One question at a
   return parts.join('\n');
 }
 
+type TextBlock = { type: string; text?: string };
+
 async function callClaude(
   system: string,
   messages: ChatMessage[],
-  opts: { maxTokens: number; effort: 'low' | 'medium' | 'high' },
+  opts: { maxTokens: number },
 ): Promise<string> {
-  const res = await client().messages.create({
-    model: MODEL,
-    max_tokens: opts.maxTokens,
-    output_config: { effort: opts.effort },
-    system,
-    messages,
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+      // Required when calling the API straight from a browser context.
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({ model: MODEL, max_tokens: opts.maxTokens, system, messages }),
   });
-  if (res.stop_reason === 'refusal') throw new Error('Model declined this request.');
-  return res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
+  if (!res.ok) throw new Error(`Claude request failed (${res.status})`);
+
+  const body = (await res.json()) as { content?: TextBlock[]; stop_reason?: string };
+  if (body.stop_reason === 'refusal') throw new Error('Model declined this request.');
+  return (body.content ?? [])
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
     .join('\n')
     .trim();
 }
@@ -220,10 +220,7 @@ export async function companionReply(
   if (!hasClaude()) return { text: localReply(ctx, history), source: 'local' };
   try {
     const messages = history.length > 0 ? history : [{ role: 'user' as const, content: "I'm here." }];
-    const text = await callClaude(buildSystemPrompt(ctx), messages, {
-      maxTokens: 1024,
-      effort: 'low',
-    });
+    const text = await callClaude(buildSystemPrompt(ctx), messages, { maxTokens: 1024 });
     return text ? { text, source: 'claude' } : { text: localReply(ctx, history), source: 'local' };
   } catch {
     return { text: localReply(ctx, history), source: 'local' };
@@ -251,7 +248,7 @@ export async function voiceQuestions(ctx: CompanionContext): Promise<string[]> {
             'Write 5 short spoken check-in questions for this person today. They will be read aloud and answered out loud, so keep each under 20 words and natural to say. Draw on their fingerprint and recent history — ask about the signs that actually matter for them. Do not ask about suicide or self-harm directly. Reply with a JSON array of 5 strings and nothing else.',
         },
       ],
-      { maxTokens: 1024, effort: 'low' },
+      { maxTokens: 1024 },
     );
     const match = raw.match(/\[[\s\S]*\]/);
     if (!match) return DEFAULT_VOICE_QUESTIONS;
@@ -314,7 +311,7 @@ ${stats}
 Rules: plain clinical language, 4-6 sentences, no bullet points, no diagnosis, no medication advice. Lead with the trend that matters most. Name the sleep/mood/adherence relationship if the data shows one. Flag anything that warrants a question in session. End by noting this is patient-generated data. Reply with the narrative only.`,
         },
       ],
-      { maxTokens: 2048, effort: 'medium' },
+      { maxTokens: 2048 },
     );
     return text || fallback;
   } catch {

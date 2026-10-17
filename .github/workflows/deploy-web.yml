@@ -1,0 +1,69 @@
+name: Deploy web build to GitHub Pages
+
+# Pages serves this repo at https://<owner>.github.io/Anchor/, so the export
+# needs `experiments.baseUrl` set to that subpath. It is patched in here rather
+# than committed to app.json so that local `expo start --web` keeps serving
+# from the root.
+#
+# No EXPO_PUBLIC_* keys are provided to this build on purpose: a web export
+# inlines them into public JavaScript, where anyone could read them. The
+# deployed site therefore runs the no-key path — on-device prosody, on-device
+# speech, no transcription — which the app is built to degrade to.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish; queue at most one more behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Point the export at the Pages subpath
+        run: |
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+            cfg.expo.experiments = { ...cfg.expo.experiments, baseUrl: '/${{ github.event.repository.name }}' };
+            fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
+          "
+
+      - run: npx expo export --platform web
+
+      # Pages runs Jekyll by default, which drops directories beginning with an
+      # underscore — and the whole JS bundle lives in _expo/.
+      - run: touch dist/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
