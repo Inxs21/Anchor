@@ -34,7 +34,7 @@ export type Analysis = {
   recommendations: string[];
   /** Tone the companion should adopt for this session. */
   tone: 'grounding' | 'activating' | 'steady';
-  source: 'claude' | 'local';
+  source: 'claude' | 'gemini' | 'groq' | 'local';
 };
 
 export type CheckIn = {

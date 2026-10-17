@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { File, Paths } from 'expo-file-system';
@@ -103,6 +104,25 @@ export class VoiceRecorder {
 export type SpeechTone = 'grounding' | 'activating' | 'steady';
 
 let activeSound: Audio.Sound | null = null;
+let activeWebAudio: HTMLAudioElement | null = null;
+
+/** Plays a URL through the browser's own audio element and resolves when done. */
+function playWebAudio(url: string): Promise<void> {
+  return new Promise((resolve) => {
+    const el = new window.Audio(url);
+    activeWebAudio = el;
+    const done = () => {
+      if (activeWebAudio === el) activeWebAudio = null;
+      resolve();
+    };
+    el.onended = done;
+    el.onerror = done;
+    // Autoplay is blocked until the page has been interacted with; the check-in
+    // is reached by tapping, so this normally resolves, and a rejection just
+    // means this line is not spoken.
+    el.play().catch(done);
+  });
+}
 
 async function speakWithElevenLabs(text: string, tone: SpeechTone): Promise<void> {
   const res = await fetch(
@@ -126,6 +146,18 @@ async function speakWithElevenLabs(text: string, tone: SpeechTone): Promise<void
     },
   );
   if (!res.ok) throw new Error(`ElevenLabs failed (${res.status})`);
+
+  // Web has no writable cache directory — expo-file-system's File throws there —
+  // so the audio is played straight from an object URL instead.
+  if (Platform.OS === 'web') {
+    const url = URL.createObjectURL(await res.blob());
+    try {
+      await playWebAudio(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    return;
+  }
 
   const bytes = new Uint8Array(await res.arrayBuffer());
   const file = new File(Paths.cache, `anchor-tts-${Date.now()}.mp3`);
@@ -176,6 +208,10 @@ export async function speak(text: string, tone: SpeechTone = 'steady'): Promise<
 
 export async function stopSpeaking(): Promise<void> {
   Speech.stop();
+  if (activeWebAudio) {
+    activeWebAudio.pause();
+    activeWebAudio = null;
+  }
   const sound = activeSound;
   activeSound = null;
   if (sound) await sound.stopAsync().catch(() => {});

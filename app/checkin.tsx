@@ -17,9 +17,10 @@ import * as Haptics from 'expo-haptics';
 import { useAuth } from '@/lib/auth';
 import { useAnchor } from '@/lib/anchor';
 import { averageVoice, saveCheckIn, type Analysis, type VoiceTurn } from '@/lib/checkins';
-import { analyzeCheckIn, voiceQuestions, DEFAULT_VOICE_QUESTIONS } from '@/lib/claude';
+import { voiceQuestions, DEFAULT_VOICE_QUESTIONS } from '@/lib/claude';
+import { analyzeCheckIn } from '@/lib/llm';
 import { analyzeProsody, speechRateScore } from '@/lib/hume';
-import { transcribe } from '@/lib/stt';
+import { canTranscribe, transcribe } from '@/lib/stt';
 import { requestMicPermission, speak, stopSpeaking, VoiceRecorder } from '@/lib/voice';
 import { Chip } from '@/components/Chip';
 import { PrimaryButton } from '@/components/PrimaryButton';
@@ -361,7 +362,9 @@ export default function CheckIn() {
                 : phase === 'recording'
                   ? 'Recording — take your time.'
                   : phase === 'typing'
-                    ? 'Your voice was measured, but the words did not come through.'
+                    ? canTranscribe()
+                      ? 'Your voice was measured, but I could not make out the words.'
+                      : 'Your voice was measured. Transcription is off, so the words are not saved unless you type them.'
                     : 'Reading your voice…'}
           </Text>
 

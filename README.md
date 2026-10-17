@@ -41,7 +41,7 @@ early enough to act.
 |---|---|
 | App | React Native · Expo Router (SDK 54) |
 | Data | Firebase Auth + Firestore |
-| Analysis | Deterministic heuristics in `lib/analysis.ts` — no model in the loop |
+| Analysis | Heuristics in `lib/analysis.ts`, optionally layered with Gemini or Groq (`lib/llm.ts`) |
 | Conversation | Claude (`claude-sonnet-5-5`) via `@anthropic-ai/sdk`, optional |
 | Voice biomarkers | On-device prosody from `expo-av` metering + transcript word rate |
 | Speech-to-text | ElevenLabs Scribe |
@@ -63,6 +63,8 @@ web preview.
 Copy `.env.example` to `.env` and fill in whatever you have:
 
 ```
+EXPO_PUBLIC_GEMINI_API_KEY=
+EXPO_PUBLIC_GROQ_API_KEY=
 EXPO_PUBLIC_ANTHROPIC_API_KEY=
 EXPO_PUBLIC_HUME_API_KEY=
 EXPO_PUBLIC_ELEVENLABS_API_KEY=
@@ -72,8 +74,13 @@ EXPO_PUBLIC_ELEVENLABS_VOICE_ID=
 **Every provider is optional and degrades gracefully**, so the app is fully demoable with no
 credentials at all:
 
+- **No Gemini or Groq key** → the daily reading is decided entirely by the heuristics. With
+  either key set (Gemini wins if both are), the model rewords the reading and may raise the risk,
+  but never lowers it below what the numbers justify and never touches the crisis response.
+  Both providers have a free tier: [Gemini](https://aistudio.google.com/apikey),
+  [Groq](https://console.groq.com/keys).
 - **No Anthropic key** → companion replies and the report narrative fall back to deterministic
-  local copy. Episode analysis, risk and alerts never used the model in the first place.
+  local copy. The daily reading does not depend on it either way.
 - **No Hume key** → prosody is measured on-device from `expo-av` amplitude metering plus speech rate
   derived from the transcript. Coarser, but real measurement rather than a placebo.
   Note that Hume's Expression Measurement batch API now answers `403 ... discontinued`, so this
@@ -117,6 +124,7 @@ lib/
   analysis.ts      pure logic — zero imports, fully testable
   claude.ts        prompts and companion conversation (analysis is heuristic)
   hume.ts          prosody via Hume, with on-device fallback
+  llm.ts           optional Gemini / Groq reading, heuristics as the floor
   stt.ts           speech-to-text via ElevenLabs Scribe, optional
   voice.ts         recording + TTS
   prodrome.ts      streak detection and alert delivery

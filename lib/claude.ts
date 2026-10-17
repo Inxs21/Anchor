@@ -160,8 +160,9 @@ async function callClaude(
 // Episode analysis
 // ---------------------------------------------------------------------------
 
-// The deterministic fallback lives in ./analysis so it stays testable without
-// this module's SDK dependency.
+// The deterministic reading lives in ./analysis so it stays testable with no
+// network at all; `analyzeCheckIn` in ./llm layers a model over it when a key
+// is configured.
 export { localAnalysis };
 
 /** Tolerant JSON extraction — models sometimes wrap JSON in prose or fences. */
@@ -176,20 +177,6 @@ function parseJson(raw: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Episode analysis is deliberately NOT a model call.
- *
- * The reading a person sees every day — their state, their risk, the gap
- * between what they said and how they sounded — comes from the deterministic
- * heuristics in `./analysis`: the same numbers, the same thresholds, every
- * time, with no key, no network and no latency in the middle of a check-in.
- * A model that reworded the same inputs differently each morning would make
- * the trend unreadable, which is the one thing this app is for.
- */
-export async function analyzeCheckIn(ctx: CompanionContext, c: CheckIn): Promise<Analysis> {
-  return localAnalysis(c, ctx.fingerprint);
 }
 
 // ---------------------------------------------------------------------------

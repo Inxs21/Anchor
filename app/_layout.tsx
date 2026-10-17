@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { AnchorProvider } from '@/lib/anchor';
+import { AppFrame } from '@/components/AppFrame';
 import { getFingerprint } from '@/lib/fingerprint';
 import { Ocean } from '@/constants/theme';
 
@@ -82,27 +83,29 @@ export default function RootLayout() {
     <GestureHandlerRootView style={styles.flex}>
       <AuthProvider>
         <StatusBar style="light" />
-        <Gate>
-          {/*
-            The provider sits at the root, not on the tab layout: `checkin` and
-            `report` are siblings of `(tabs)`, so a provider mounted inside the
-            group is not in their tree and `useAnchor` would throw there.
-          */}
-          <AnchorProvider>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: Ocean.bg },
-              }}
-            >
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="(auth)" />
-              <Stack.Screen name="(onboarding)" />
-              <Stack.Screen name="checkin" options={{ presentation: 'modal' }} />
-              <Stack.Screen name="report" options={{ presentation: 'modal' }} />
-            </Stack>
-          </AnchorProvider>
-        </Gate>
+        <AppFrame>
+          <Gate>
+            {/*
+              The provider sits at the root, not on the tab layout: `checkin`
+              and `report` are siblings of `(tabs)`, so a provider mounted
+              inside the group is not in their tree and `useAnchor` would throw.
+            */}
+            <AnchorProvider>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: Ocean.bg },
+                }}
+              >
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="(auth)" />
+                <Stack.Screen name="(onboarding)" />
+                <Stack.Screen name="checkin" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="report" options={{ presentation: 'modal' }} />
+              </Stack>
+            </AnchorProvider>
+          </Gate>
+        </AppFrame>
       </AuthProvider>
     </GestureHandlerRootView>
   );

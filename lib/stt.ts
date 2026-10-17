@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { ELEVENLABS_API_KEY, hasSpeechToText } from './env';
 
 /**
@@ -26,6 +27,26 @@ export type TranscriptionInput = {
 
 export const canTranscribe = hasSpeechToText;
 
+/**
+ * The two platforms need different things in the multipart body, and getting
+ * this wrong fails silently-ish: React Native's FormData understands a
+ * `{ uri, name, type }` descriptor and streams the file itself, while a browser
+ * stringifies that same object to "[object Object]" and the API rejects it with
+ * 422 "Expected UploadFile". On web the recording URI is a blob: or data: URL,
+ * so it has to be read into a real Blob first.
+ */
+async function buildFilePart(input: TranscriptionInput): Promise<Blob> {
+  if (Platform.OS === 'web') {
+    const res = await fetch(input.uri);
+    return res.blob();
+  }
+  return {
+    uri: input.uri,
+    name: 'answer.m4a',
+    type: input.mimeType ?? 'audio/m4a',
+  } as unknown as Blob;
+}
+
 /** Returns the spoken text, or '' when transcription is unavailable or fails. */
 export async function transcribe(input: TranscriptionInput): Promise<string> {
   if (!hasSpeechToText()) return '';
@@ -39,11 +60,12 @@ export async function transcribe(input: TranscriptionInput): Promise<string> {
     // answer, and both cost latency the check-in flow cannot spare.
     form.append('diarize', 'false');
     form.append('tag_audio_events', 'false');
-    form.append('file', {
-      uri: input.uri,
-      name: 'answer.m4a',
-      type: input.mimeType ?? 'audio/m4a',
-    } as unknown as Blob);
+
+    const part = await buildFilePart(input);
+    // The filename matters on web: without it the browser sends the part as a
+    // plain field rather than a file upload.
+    if (Platform.OS === 'web') form.append('file', part, 'answer.webm');
+    else form.append('file', part);
 
     const res = await fetch(STT_URL, {
       method: 'POST',
