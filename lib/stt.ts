@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { ELEVENLABS_API_KEY, hasSpeechToText } from './env';
+import { utteranceMsFromWords, type TimedWord } from './analysis';
 
 /**
  * Speech-to-text for the spoken check-in.
@@ -25,6 +26,18 @@ export type TranscriptionInput = {
   mimeType?: string;
 };
 
+export type Transcription = {
+  text: string;
+  /**
+   * Span from the first word to the last, in ms, or 0 when unknown. Speech rate
+   * is measured against this rather than the recording length, which also holds
+   * however long the person took to start and stop.
+   */
+  spokenMs: number;
+};
+
+const EMPTY: Transcription = { text: '', spokenMs: 0 };
+
 export const canTranscribe = hasSpeechToText;
 
 /**
@@ -47,9 +60,9 @@ async function buildFilePart(input: TranscriptionInput): Promise<Blob> {
   } as unknown as Blob;
 }
 
-/** Returns the spoken text, or '' when transcription is unavailable or fails. */
-export async function transcribe(input: TranscriptionInput): Promise<string> {
-  if (!hasSpeechToText()) return '';
+/** Returns the spoken text, or empty text when unavailable or failed. */
+export async function transcribe(input: TranscriptionInput): Promise<Transcription> {
+  if (!hasSpeechToText()) return EMPTY;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -73,12 +86,16 @@ export async function transcribe(input: TranscriptionInput): Promise<string> {
       body: form,
       signal: controller.signal,
     });
-    if (!res.ok) return '';
-    const json = (await res.json()) as { text?: unknown };
-    return typeof json.text === 'string' ? json.text.trim() : '';
+    if (!res.ok) return EMPTY;
+    const json = (await res.json()) as { text?: unknown; words?: TimedWord[] };
+    if (typeof json.text !== 'string') return EMPTY;
+    return {
+      text: json.text.trim(),
+      spokenMs: Array.isArray(json.words) ? utteranceMsFromWords(json.words) : 0,
+    };
   } catch {
     // Offline, aborted, rate limited — all the same to the caller.
-    return '';
+    return EMPTY;
   } finally {
     clearTimeout(timer);
   }

@@ -19,6 +19,8 @@ import {
   spokenText,
   STREAK_THRESHOLD,
   transcriptSignals,
+  utteranceMsFromMeters,
+  utteranceMsFromWords,
 } from '../lib/analysis.ts';
 
 let passed = 0;
@@ -271,6 +273,40 @@ check('localAnalysis: a single ordinary phrase does not move the reading', () =>
   const one = localAnalysis(day({ turns: [turn('work was heavy today')] }), null);
   eq(one.risk, quiet.risk, 'risk');
   eq(one.discrepancy, null, 'discrepancy');
+});
+
+// --- how long someone actually spoke ----------------------------------------
+
+check('utteranceMsFromWords: measures first word to last, not the recording', () => {
+  // Someone taps record, waits 6s, speaks for 2s, waits 9s before tapping stop.
+  const words = [
+    { text: 'I', start: 6.0, end: 6.2, type: 'word' },
+    { text: ' ', start: 6.2, end: 6.25, type: 'spacing' },
+    { text: 'slept', start: 6.25, end: 6.6, type: 'word' },
+    { text: 'badly', start: 7.4, end: 8.0, type: 'word' },
+  ];
+  eq(utteranceMsFromWords(words), 2000, 'span');
+});
+
+check('utteranceMsFromWords: spacing-only or empty input yields nothing', () => {
+  eq(utteranceMsFromWords([]), 0, 'empty');
+  eq(utteranceMsFromWords([{ text: ' ', start: 1, end: 2, type: 'spacing' }]), 0, 'spacing only');
+  eq(utteranceMsFromWords([{ text: 'x', type: 'word' }]), 0, 'no timestamps');
+});
+
+check('utteranceMsFromMeters: trims leading and trailing silence', () => {
+  // 100ms per sample: 3 silent, 4 audible, 5 silent.
+  const samples = [-90, -90, -90, -20, -18, -25, -22, -90, -90, -90, -90, -90];
+  eq(utteranceMsFromMeters(samples, 100), 400, 'span');
+});
+
+check('utteranceMsFromMeters: all-silent input yields nothing', () => {
+  eq(utteranceMsFromMeters([-90, -80, -120], 100), 0, 'silence');
+  eq(utteranceMsFromMeters([], 100), 0, 'empty');
+});
+
+check('utteranceMsFromMeters: a single audible sample still counts', () => {
+  eq(utteranceMsFromMeters([-90, -20, -90], 100), 100, 'one sample');
 });
 
 // --- putting numbers into words ---------------------------------------------

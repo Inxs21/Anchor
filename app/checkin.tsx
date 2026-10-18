@@ -59,7 +59,8 @@ export default function CheckIn() {
   const [micDenied, setMicDenied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A take whose words we could not hear, held while the person types them.
-  const [pending, setPending] = useState<VoiceTurn | null>(null);
+  // The spoken span rides along so a typed answer gets the same rate basis.
+  const [pending, setPending] = useState<{ turn: VoiceTurn; spokenMs: number } | null>(null);
   const [typed, setTyped] = useState('');
 
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -149,25 +150,30 @@ export default function CheckIn() {
 
   const endRecording = async () => {
     setPhase('processing');
-    let captured: VoiceTurn | null = null;
+    let captured: { turn: VoiceTurn; spokenMs: number } | null = null;
     try {
       const take = await recorder.stop();
       // Takes under ~0.7s carry no usable prosody — treat them as a non-answer.
       if (take && take.durationMs > 700) {
-        // Transcribe before prosody: the word count is what turns metering into
-        // a speech-rate reading, and it is the pressured-speech signal.
+        // Transcribe before prosody: the words give the count, and their
+        // timestamps give the span the rate is measured against.
         const spoken = await transcribe({ uri: take.uri });
         const { scores, transcript } = await analyzeProsody({
           uri: take.uri,
           durationMs: take.durationMs,
-          transcript: spoken,
+          transcript: spoken.text,
+          spokenMs: spoken.spokenMs || undefined,
           meterSamples: take.meterSamples,
+          meterIntervalMs: take.meterIntervalMs,
         });
         captured = {
-          question: questions[qIndex],
-          transcript,
-          scores,
-          durationMs: take.durationMs,
+          turn: {
+            question: questions[qIndex],
+            transcript,
+            scores,
+            durationMs: take.durationMs,
+          },
+          spokenMs: spoken.spokenMs,
         };
       }
     } catch {
@@ -176,13 +182,13 @@ export default function CheckIn() {
     if (cancelled.current) return;
 
     // Nothing came back in words — offer to type it rather than storing silence.
-    if (captured && !captured.transcript.trim()) {
+    if (captured && !captured.turn.transcript.trim()) {
       setPending(captured);
       setTyped('');
       setPhase('typing');
       return;
     }
-    if (captured) commitTurn(captured);
+    if (captured) commitTurn(captured.turn);
     await advance();
   };
 
@@ -196,12 +202,16 @@ export default function CheckIn() {
       commitTurn(
         text
           ? {
-              ...take,
+              ...take.turn,
               transcript: text,
-              // Rate was measured as neutral without words; the real count beats it.
-              scores: { ...take.scores, speechRate: speechRateScore(text, take.durationMs) },
+              // Rate was measured as neutral without words; the real count beats
+              // it, measured against the span they were audible for.
+              scores: {
+                ...take.turn.scores,
+                speechRate: speechRateScore(text, take.turn.durationMs, take.spokenMs || undefined),
+              },
             }
-          : take,
+          : take.turn,
       );
     }
     await advance();
@@ -216,11 +226,18 @@ export default function CheckIn() {
       commitTurn(
         text
           ? {
-              ...pending,
+              ...pending.turn,
               transcript: text,
-              scores: { ...pending.scores, speechRate: speechRateScore(text, pending.durationMs) },
+              scores: {
+                ...pending.turn.scores,
+                speechRate: speechRateScore(
+                  text,
+                  pending.turn.durationMs,
+                  pending.spokenMs || undefined,
+                ),
+              },
             }
-          : pending,
+          : pending.turn,
       );
       setPending(null);
       setTyped('');

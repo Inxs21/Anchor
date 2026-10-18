@@ -328,6 +328,59 @@ export function localAnalysis(c: CheckIn, fp: FingerprintLike | null): Analysis 
 }
 
 // ---------------------------------------------------------------------------
+// How long someone actually spoke
+// ---------------------------------------------------------------------------
+
+/**
+ * Speech rate is words over time, and the denominator has to be the time they
+ * were SPEAKING. A recording runs from the tap that starts it to the tap that
+ * stops it, so it carries however long the person took to begin and however
+ * long they sat before reaching for the button. Counting that silence makes a
+ * pressured answer read as a slowed one, which is the exact signal inverted.
+ *
+ * Both helpers below return the span from the first speech to the last, so
+ * leading and trailing silence drop out while the pauses *within* an answer
+ * stay in — pauses are part of how fast someone is talking, and keeping them
+ * is what the 1.0–4.5 words-per-second calibration was built against.
+ */
+
+export type TimedWord = { start?: number; end?: number; type?: string };
+
+/** Span in ms from the first word to the last, using Scribe's timestamps. */
+export function utteranceMsFromWords(words: TimedWord[]): number {
+  const spoken = words.filter(
+    (w) => w.type !== 'spacing' && Number.isFinite(w.start) && Number.isFinite(w.end),
+  );
+  if (spoken.length === 0) return 0;
+  const start = Math.min(...spoken.map((w) => w.start as number));
+  const end = Math.max(...spoken.map((w) => w.end as number));
+  // Scribe reports seconds.
+  return Math.max(0, (end - start) * 1000);
+}
+
+/**
+ * The same span from expo-av's dBFS metering, for when there is no transcript.
+ * Anything above the floor counts as sound; the span runs from the first such
+ * sample to the last.
+ */
+export function utteranceMsFromMeters(
+  samples: number[],
+  intervalMs: number,
+  floorDb = -45,
+): number {
+  const first = samples.findIndex((db) => Number.isFinite(db) && db > floorDb);
+  if (first === -1) return 0;
+  let last = first;
+  for (let i = samples.length - 1; i > first; i--) {
+    if (Number.isFinite(samples[i]) && samples[i] > floorDb) {
+      last = i;
+      break;
+    }
+  }
+  return (last - first + 1) * intervalMs;
+}
+
+// ---------------------------------------------------------------------------
 // Putting numbers into words
 // ---------------------------------------------------------------------------
 

@@ -17,6 +17,8 @@ export type RecordingResult = {
   uri: string;
   durationMs: number;
   meterSamples: number[];
+  /** Spacing of meterSamples, so a silence span can be turned into a duration. */
+  meterIntervalMs: number;
 };
 
 const METER_INTERVAL_MS = 100;
@@ -86,7 +88,12 @@ export class VoiceRecorder {
 
     const uri = recording.getURI();
     if (!uri) return null;
-    return { uri, durationMs: this.durationMs, meterSamples: [...this.samples] };
+    return {
+      uri,
+      durationMs: this.durationMs,
+      meterSamples: [...this.samples],
+      meterIntervalMs: METER_INTERVAL_MS,
+    };
   }
 
   /** Abandons the take without returning it (used when a screen unmounts). */

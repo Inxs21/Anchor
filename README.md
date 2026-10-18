@@ -140,6 +140,11 @@ testable outside the app, and guarantees the no-key path works.
 
 - Vocal measures are normalised per-sample, not calibrated against a clinical baseline. They show
   change over time for one person; they are not a diagnostic.
+- Speech rate is words over the span from the first word to the last, not over the length of the
+  recording. Measured the naive way, a 14-word pressured answer inside an 18-second recording
+  scores 0% — maximally *slowed* — because the silence before and after the answer dominates the
+  denominator. The same answer scores 93% measured over the 3.3 seconds actually spoken. Word
+  timestamps come from Scribe; without them the span is recovered from amplitude metering.
 - Alerts are pattern notifications, not diagnoses, and the app says so everywhere it can.
 - The companion is instructed never to diagnose or give medication advice, and to route anything
   involving self-harm or psychosis to 988 and to a real human immediately.

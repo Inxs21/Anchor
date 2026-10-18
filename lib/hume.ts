@@ -1,4 +1,5 @@
 import { HUME_API_KEY, hasHume } from './env';
+import { utteranceMsFromMeters } from './analysis';
 import type { VoiceScores } from './checkins';
 
 /**
@@ -27,6 +28,14 @@ export type ProsodyInput = {
   transcript: string;
   /** dBFS samples captured while recording (expo-av metering), newest last. */
   meterSamples?: number[];
+  /** Gap between meter samples, for turning them into a duration. */
+  meterIntervalMs?: number;
+  /**
+   * How long the person was actually speaking, when something better than the
+   * recording length is known — Scribe's word timestamps, usually. Leading and
+   * trailing silence are excluded.
+   */
+  spokenMs?: number;
 };
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
@@ -41,14 +50,27 @@ function stdev(xs: number[]): number {
 /**
  * Words per second → 0..1, centred on conversational speech (~2.5 wps).
  *
+ * `spokenMs` is the span the person was actually talking; it is what the rate
+ * is measured against whenever it is known, because the recording length
+ * includes however long they took to start and to stop. Falls back to the
+ * recording length when nothing better is available.
+ *
  * Exported because a transcript can arrive after prosody has been measured —
  * when the person types what they said — and speech rate is the one measure
  * that has to be recomputed when it does.
  */
-export function speechRateScore(transcript: string, durationMs: number): number {
+export function speechRateScore(
+  transcript: string,
+  durationMs: number,
+  spokenMs?: number,
+): number {
   const words = transcript.trim().split(/\s+/).filter(Boolean).length;
-  const seconds = Math.max(durationMs / 1000, 1);
   if (words === 0) return 0.5;
+  // Guard both ends: a span shorter than half a second is noise, and it can
+  // never exceed the recording it came from.
+  const usable =
+    spokenMs !== undefined && spokenMs >= 500 ? Math.min(spokenMs, durationMs) : durationMs;
+  const seconds = Math.max(usable / 1000, 1);
   const wps = words / seconds;
   // 1.0 wps → 0.1 (slowed), 2.5 wps → 0.5 (typical), 4.5 wps → 0.95 (pressured)
   return clamp01((wps - 1.0) / 3.5);
@@ -60,7 +82,12 @@ export function localProsody(input: ProsodyInput): VoiceScores {
   const normalized = samples.map((db) => clamp01((db + 50) / 50));
   const loud = normalized.filter((n) => n > 0.08);
 
-  const speechRate = speechRateScore(input.transcript, input.durationMs);
+  // Word timestamps are the best source; metering is the next best, and it is
+  // all there is when transcription is off.
+  // A metering span of 0 means nothing crossed the floor; speechRateScore
+  // treats anything under half a second as unusable and falls back on its own.
+  const spokenMs = input.spokenMs ?? utteranceMsFromMeters(samples, input.meterIntervalMs ?? 100);
+  const speechRate = speechRateScore(input.transcript, input.durationMs, spokenMs);
   const energy = loud.length > 0 ? clamp01(mean(loud) * 1.15) : clamp01(0.35 + speechRate * 0.3);
   const pitchVariance = loud.length > 2 ? clamp01(stdev(loud) * 3.2) : clamp01(0.3 + speechRate * 0.4);
   // Without a model, valence is inferred from activation balance — deliberately
