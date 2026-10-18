@@ -24,7 +24,7 @@ export const ELEVENLABS_VOICE_ID = read('EXPO_PUBLIC_ELEVENLABS_VOICE_ID') || 'E
 // Free-tier analysis providers. Either one turns the model-backed reading on;
 // with neither, the deterministic heuristics decide every check-in.
 export const GEMINI_API_KEY = read('EXPO_PUBLIC_GEMINI_API_KEY');
-export const GEMINI_MODEL = read('EXPO_PUBLIC_GEMINI_MODEL') || 'gemini-2.0-flash';
+export const GEMINI_MODEL = read('EXPO_PUBLIC_GEMINI_MODEL') || 'gemini-3.5-flash';
 export const GROQ_API_KEY = read('EXPO_PUBLIC_GROQ_API_KEY');
 export const GROQ_MODEL = read('EXPO_PUBLIC_GROQ_MODEL') || 'llama-3.3-70b-versatile';
 

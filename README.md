@@ -78,7 +78,8 @@ credentials at all:
   either key set (Gemini wins if both are), the model rewords the reading and may raise the risk,
   but never lowers it below what the numbers justify and never touches the crisis response.
   Both providers have a free tier: [Gemini](https://aistudio.google.com/apikey),
-  [Groq](https://console.groq.com/keys).
+  [Groq](https://console.groq.com/keys). Free tiers answer `503 high demand` often enough that
+  each call retries once before giving up and letting the heuristics decide.
 - **No Anthropic key** → companion replies and the report narrative fall back to deterministic
   local copy. The daily reading does not depend on it either way.
 - **No Hume key** → prosody is measured on-device from `expo-av` amplitude metering plus speech rate

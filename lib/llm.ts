@@ -20,6 +20,11 @@ import { buildSystemPrompt, type CompanionContext } from './claude';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const TIMEOUT_MS = 20000;
+// Free tiers answer 503 "high demand" or 429 often enough that one immediate
+// retry is the difference between a model reading and a heuristic one. Anything
+// past that is not worth making someone wait at the end of a check-in.
+const RETRY_STATUSES = [429, 500, 502, 503, 504];
+const RETRY_DELAY_MS = 900;
 
 export type LLMProvider = 'gemini' | 'groq';
 
@@ -40,20 +45,28 @@ async function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Promise
   }
 }
 
+/** POSTs, retrying once on the transient statuses free tiers hand out. */
+async function postWithRetry(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+  const res = await fetch(url, { ...init, signal });
+  if (!RETRY_STATUSES.includes(res.status)) return res;
+  await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+  return fetch(url, { ...init, signal });
+}
+
 async function callGemini(system: string, user: string): Promise<string> {
   return withTimeout(async (signal) => {
-    const res = await fetch(
+    const res = await postWithRetry(
       `${GEMINI_URL}/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        signal,
         body: JSON.stringify({
           system_instruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: user }] }],
           generationConfig: { responseMimeType: 'application/json', temperature: 0.3 },
         }),
       },
+      signal,
     );
     if (!res.ok) throw new Error(`Gemini failed (${res.status})`);
     const body = (await res.json()) as {
@@ -68,23 +81,26 @@ async function callGemini(system: string, user: string): Promise<string> {
 
 async function callGroq(system: string, user: string): Promise<string> {
   return withTimeout(async (signal) => {
-    const res = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${GROQ_API_KEY}`,
+    const res = await postWithRetry(
+      GROQ_URL,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        }),
       },
       signal,
-      body: JSON.stringify({
-        model: GROQ_MODEL,
-        temperature: 0.3,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
-    });
+    );
     if (!res.ok) throw new Error(`Groq failed (${res.status})`);
     const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return (body.choices?.[0]?.message?.content ?? '').trim();
