@@ -20,11 +20,15 @@ import { buildSystemPrompt, type CompanionContext } from './claude';
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const TIMEOUT_MS = 20000;
-// Free tiers answer 503 "high demand" or 429 often enough that one immediate
-// retry is the difference between a model reading and a heuristic one. Anything
-// past that is not worth making someone wait at the end of a check-in.
+// Free tiers answer 503 "high demand" and 429 in short bursts: observed in the
+// wild, a call and an immediate retry both failed while the same request
+// succeeded 12 times in a row a minute later. So the backoff has to outlast a
+// burst, not just blink — and the last Gemini attempt drops to the lite model,
+// which is a different capacity pool. Worst case is a few seconds at the end of
+// a check-in; after that the heuristic reading stands.
 const RETRY_STATUSES = [429, 500, 502, 503, 504];
-const RETRY_DELAY_MS = 900;
+const RETRY_DELAYS_MS = [700, 1800];
+const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 
 export type LLMProvider = 'gemini' | 'groq';
 
@@ -45,18 +49,32 @@ async function withTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Promise
   }
 }
 
-/** POSTs, retrying once on the transient statuses free tiers hand out. */
-async function postWithRetry(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
-  const res = await fetch(url, { ...init, signal });
-  if (!RETRY_STATUSES.includes(res.status)) return res;
-  await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-  return fetch(url, { ...init, signal });
+/**
+ * POSTs, retrying on the transient statuses free tiers hand out. `buildUrl`
+ * takes the attempt number so a provider can move to a different model for a
+ * later try.
+ */
+async function postWithRetry(
+  buildUrl: (attempt: number) => string,
+  init: RequestInit,
+  signal: AbortSignal,
+): Promise<Response> {
+  let res = await fetch(buildUrl(0), { ...init, signal });
+  for (let attempt = 1; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    if (!RETRY_STATUSES.includes(res.status)) return res;
+    await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt - 1]));
+    res = await fetch(buildUrl(attempt), { ...init, signal });
+  }
+  return res;
 }
 
 async function callGemini(system: string, user: string): Promise<string> {
   return withTimeout(async (signal) => {
     const res = await postWithRetry(
-      `${GEMINI_URL}/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+      (attempt) => {
+        const model = attempt < RETRY_DELAYS_MS.length ? GEMINI_MODEL : GEMINI_FALLBACK_MODEL;
+        return `${GEMINI_URL}/${model}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+      },
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -82,7 +100,7 @@ async function callGemini(system: string, user: string): Promise<string> {
 async function callGroq(system: string, user: string): Promise<string> {
   return withTimeout(async (signal) => {
     const res = await postWithRetry(
-      GROQ_URL,
+      () => GROQ_URL,
       {
         method: 'POST',
         headers: {
